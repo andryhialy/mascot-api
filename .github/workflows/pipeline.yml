@@ -117,38 +117,40 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Authenticate to Google Cloud
-      id: auth
-      uses: google-github-actions/auth@v2
+    - name: Configure AWS credentials (OIDC)
+      uses: aws-actions/configure-aws-credentials@v2
       with:
-        workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-        service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-region: ${{ secrets.AWS_REGION }}
 
-    - name: Set up Google Cloud CLI
-      uses: google-github-actions/setup-gcloud@v2
-
-    - name: Configure Docker
-      run: gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev
+    - name: Login to Amazon ECR
+      uses: aws-actions/amazon-ecr-login@v1
 
     - name: Pull the image from GitHub Container Registry
       run: docker pull ghcr.io/${{ github.repository }}:${{ github.sha }}
 
-    - name: Tag the image for GCP Container Registry
+    - name: Tag the image for Amazon ECR
       run: |
-        docker tag ghcr.io/${{ github.repository }}:${{ github.sha }} \
-          ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_REGISTRY_NAME }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+        ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+        docker tag ghcr.io/${{ github.repository }}:${{ github.sha }} $ECR_REGISTRY/${{ secrets.AWS_ECR_REPOSITORY }}:${{ github.sha }}
         docker image ls
 
-    - name: Push the tagged image to GCP Container Registry
-      run: docker push ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_REGISTRY_NAME }}/$SERVICE_NAME:${{ github.sha }}
+    - name: Push the tagged image to Amazon ECR
+      run: |
+        ECR_REGISTRY=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+        docker push $ECR_REGISTRY/${{ secrets.AWS_ECR_REPOSITORY }}:${{ github.sha }}
 
-    - name: Deploy to Cloud Run service
-      uses: google-github-actions/deploy-cloudrun@v2
-      with:
-        service: ${{ env.SERVICE_NAME }}
-        region: ${{ secrets.GCP_REGION }}
-        image: ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{secrets.GCP_PROJECT_ID}}/${{ secrets.GCP_REGISTRY_NAME }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
-        flags: '--allow-unauthenticated'
+    - name: Deploy to ECS (optional)
+      if: secrets.AWS_ECS_CLUSTER && secrets.AWS_ECS_SERVICE
+      run: |
+        aws ecs update-service --cluster ${{ secrets.AWS_ECS_CLUSTER }} --service ${{ secrets.AWS_ECS_SERVICE }} --force-new-deployment --region ${{ secrets.AWS_REGION }}
+
+    - name: Test the Live Application (optional)
+      if: secrets.DEPLOY_URL
+      run: |
+        DEPLOY_URL=${{ secrets.DEPLOY_URL }}
+        curl --silent --fail ${DEPLOY_URL}/health
+        curl --silent --fail ${DEPLOY_URL}/05024756-765e-41a9-89d7-1407436d9a58
 
     - name: Test the Live Application
       run: |
